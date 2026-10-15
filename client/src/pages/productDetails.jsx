@@ -1,0 +1,208 @@
+import { useEffect, useState } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import Navbar from '../components/Navbar';
+import api, { productsApi, wishlistApi } from '../services/api';
+import { useCart } from '../context/CartContext';
+
+const ProductDetails = () => {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const { addToCart, cartItems } = useCart();
+  const [product, setProduct] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [wishlistState, setWishlistState] = useState('default');
+  const [isAddingToCart, setIsAddingToCart] = useState(false);
+  const [cartFeedback, setCartFeedback] = useState(null);
+
+  useEffect(() => {
+    const fetchProductDetails = async () => {
+      try {
+        const response = await productsApi.get(`/${id}`);
+        setProduct(response.data.product);
+      } catch (err) {
+        console.error('Failed to fetch product details', err);
+        if (err.response?.status === 400) {
+          setError('Invalid product ID format.');
+        } else if (err.response?.status === 404) {
+          setError('Product not found.');
+        } else {
+          setError('Something went wrong while loading the product details.');
+        }
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    const fetchAuthAndCheckWishlist = async () => {
+      try {
+        await api.get('/getMe?_t=' + Date.now()); // Verify auth
+
+        const wishlistRes = await wishlistApi.get('/');
+        const userWishlist = wishlistRes.data.wishlist || [];
+        
+        // Match by product name instead of ID, as database may have seeded duplicate objects
+        if (product && userWishlist.some(item => item.name === product.name)) {
+          setWishlistState('added');
+        }
+      } catch (err) {
+        console.error('Failed to get auth/wishlist status', err);
+      }
+    };
+
+    if (!product) {
+      fetchProductDetails();
+    } else {
+      fetchAuthAndCheckWishlist();
+    }
+  }, [id, product]);
+
+  const handleAddToWishlist = async () => {
+    if (wishlistState === 'saving' || wishlistState === 'added') return;
+
+    setWishlistState('saving');
+    try {
+      await wishlistApi.post(`/${id}`);
+      setWishlistState('added');
+    } catch (err) {
+      console.error('Failed to add to wishlist', err);
+      if (err.response?.status === 409) {
+        setWishlistState('added');
+      } else {
+        setWishlistState('error');
+        alert(err.response?.data?.message || 'Failed to add to wishlist');
+      }
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <Navbar />
+        <div className="flex justify-center items-center h-screen">
+          <div className="text-xl text-gray-600 font-semibold animate-pulse">Loading product...</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (error || !product) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <Navbar />
+        <div className="max-w-7xl mx-auto py-12 px-4 sm:px-6 lg:px-8">
+          <div className="bg-red-50 p-4 rounded-md text-center">
+            <h3 className="text-lg font-medium text-red-800">{error || 'Product not found'}</h3>
+            <button 
+              onClick={() => navigate('/home')}
+              className="mt-4 inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-red-700 bg-red-100 hover:bg-red-200"
+            >
+              Back to Home
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <Navbar />
+      <div className="max-w-7xl mx-auto py-12 px-4 sm:px-6 lg:px-8">
+        
+        <button 
+          onClick={() => navigate('/home')}
+          className="mb-6 inline-flex items-center text-sm font-medium text-indigo-600 hover:text-indigo-500"
+        >
+          &larr; Back to Products
+        </button>
+
+        <div className="bg-white shadow overflow-hidden sm:rounded-lg">
+          <div className="md:flex">
+            <div className="md:w-1/2 h-96 md:h-auto">
+              <img 
+                src={product.image} 
+                alt={product.name} 
+                className="w-full h-full object-cover"
+              />
+            </div>
+            <div className="md:w-1/2 p-8 flex flex-col justify-center">
+              <span className="inline-block px-3 py-1 text-sm font-semibold text-indigo-600 bg-indigo-100 rounded-full mb-4 self-start">
+                {product.category}
+              </span>
+              <h2 className="text-3xl font-extrabold text-gray-900 sm:text-4xl mb-4">
+                {product.name}
+              </h2>
+              <p className="text-xl text-gray-500 mb-6">
+                {product.description}
+              </p>
+              
+              <div className="flex items-center justify-between mb-8 pb-8 border-b border-gray-200">
+                <span className="text-4xl font-black text-gray-900">${product.price.toFixed(2)}</span>
+                <span className={`text-lg font-medium ${product.stock > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                  {product.stock > 0 ? `${product.stock} units available` : 'Out of stock'}
+                </span>
+              </div>
+              
+              {cartFeedback && (
+                <div
+                  className={`mb-4 p-3 rounded-md text-sm font-medium ${
+                    cartFeedback.type === 'success'
+                      ? 'bg-green-50 text-green-800 border border-green-200'
+                      : 'bg-red-50 text-red-800 border border-red-200'
+                  }`}
+                >
+                  {cartFeedback.message}
+                </div>
+              )}
+
+              <div className="flex flex-col sm:flex-row gap-4">
+                <button 
+                  className={`flex-1 py-4 px-8 border border-transparent text-lg font-bold rounded-md text-white shadow-sm transition-colors cursor-pointer ${
+                    product.stock > 0 
+                      ? isAddingToCart
+                        ? 'bg-indigo-400 cursor-wait'
+                        : 'bg-indigo-600 hover:bg-indigo-700 focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500' 
+                      : 'bg-gray-400 cursor-not-allowed'
+                  }`}
+                  disabled={product.stock === 0 || isAddingToCart}
+                  onClick={async () => {
+                    setIsAddingToCart(true);
+                    setCartFeedback(null);
+                    const res = await addToCart(product._id);
+                    if (res.success) {
+                      setCartFeedback({ type: 'success', message: `${product.name} added to cart!` });
+                    } else {
+                      setCartFeedback({ type: 'error', message: res.message });
+                    }
+                    setIsAddingToCart(false);
+                    setTimeout(() => setCartFeedback(null), 3000);
+                  }}
+                >
+                  {product.stock === 0
+                    ? 'Out of Stock'
+                    : isAddingToCart
+                    ? 'Adding...'
+                    : cartItems.some(i => i.product?._id === product._id)
+                    ? 'Add Another'
+                    : 'Add to Cart'}
+                </button>
+                <button
+                  onClick={handleAddToWishlist}
+                  disabled={wishlistState === 'saving' || wishlistState === 'added'}
+                  className="flex-1 py-4 px-8 border border-gray-300 bg-white text-lg font-bold text-gray-700 rounded-md hover:bg-gray-50 transition-colors flex justify-center items-center cursor-pointer"
+                >
+                  {wishlistState === 'saving' ? '⏳ Saving...' :
+                   wishlistState === 'added' ? '♥ Already added to wishlist' :
+                   '♡ Add to Wishlist'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default ProductDetails;
