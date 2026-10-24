@@ -7,5 +7,6 @@ router.post('/register', registerUser);
 router.post('/login', loginUser);
 router.post('/logout', logoutUser);
 router.get('/getMe', isAuthenticated, getMe);
+router.get('/me', isAuthenticated, getMe);
 
 export default router;

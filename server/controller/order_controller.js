@@ -112,7 +112,16 @@ export const createPaymentOrder = async (req, res) => {
     await shopKartOrder.save();
 
     // Create Razorpay Order in paise
+    // Create Razorpay Order in paise
     const amountInPaise = Math.round(calculatedTotal * 100);
+    
+    if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET || process.env.RAZORPAY_KEY_ID === 'rzp_test_placeholder') {
+      return res.status(400).json({
+        success: false,
+        message: 'Razorpay API keys not configured. Please add your RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET in server/.env'
+      });
+    }
+
     let razorpayOrderId;
 
     try {
@@ -123,9 +132,11 @@ export const createPaymentOrder = async (req, res) => {
       });
       razorpayOrderId = rzpOrder.id;
     } catch (rzpErr) {
-      console.warn('Razorpay API error (using mock order ID for testing if test credentials):', rzpErr.message);
-      // Fallback in case of mock/unactivated sandbox keys
-      razorpayOrderId = `order_${shopKartOrder._id.toString().slice(-8)}_${Date.now()}`;
+      console.error('Razorpay API error:', rzpErr);
+      return res.status(502).json({
+        success: false,
+        message: `Failed to create Razorpay Order: ${rzpErr.error?.description || rzpErr.message || 'Authentication or API error'}`
+      });
     }
 
     shopKartOrder.razorpayOrderId = razorpayOrderId;
@@ -137,7 +148,7 @@ export const createPaymentOrder = async (req, res) => {
       razorpayOrderId: razorpayOrderId,
       amount: amountInPaise,
       currency: 'INR',
-      key: process.env.RAZORPAY_KEY_ID || 'rzp_test_placeholder'
+      key: process.env.RAZORPAY_KEY_ID
     });
   } catch (error) {
     console.error('createPaymentOrder error: ', error);
@@ -153,10 +164,10 @@ export const verifyPayment = async (req, res) => {
     const { shopKartOrderId, razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
     const userId = req.user._id;
 
-    if (!shopKartOrderId || !razorpay_payment_id) {
+    if (!shopKartOrderId || !razorpay_payment_id || !razorpay_signature) {
       return res.status(400).json({
         success: false,
-        message: 'Missing required payment verification details'
+        message: 'Missing required payment verification details (orderId, paymentId, or signature)'
       });
     }
 
@@ -169,17 +180,23 @@ export const verifyPayment = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Unauthorized order access' });
     }
 
-    // Cryptographic signature verification
-    const secret = process.env.RAZORPAY_KEY_SECRET || 'shopkart_test_secret_456';
-    const body = order.razorpayOrderId + '|' + razorpay_payment_id;
+    // Cryptographic signature verification using HMAC SHA-256
+    const secret = process.env.RAZORPAY_KEY_SECRET;
+    if (!secret) {
+      return res.status(500).json({
+        success: false,
+        message: 'Razorpay Key Secret not configured on the server'
+      });
+    }
+
+    const orderIdToVerify = order.razorpayOrderId || razorpay_order_id;
+    const body = orderIdToVerify + '|' + razorpay_payment_id;
     const expectedSignature = crypto
       .createHmac('sha256', secret)
       .update(body)
       .digest('hex');
 
-    const isSignatureValid =
-      expectedSignature === razorpay_signature ||
-      razorpay_signature === 'simulated_test_signature';
+    const isSignatureValid = expectedSignature === razorpay_signature;
 
     if (!isSignatureValid) {
       order.paymentStatus = 'FAILED';
